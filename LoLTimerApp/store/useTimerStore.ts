@@ -52,6 +52,16 @@ export interface EnemyChampion {
   /** Ability Haste stat entered by the user (default 0). */
   abilityHaste: number;
 
+  // ---- Summoner spells ------------------------------------------------------
+  /** Data Dragon id for summoner spell 1, e.g. "SummonerFlash". */
+  spell1Id: string;
+  /** Data Dragon id for summoner spell 2. */
+  spell2Id: string;
+  /** Base cooldown of spell 1 in seconds. */
+  spell1BaseCooldown: number;
+  /** Base cooldown of spell 2 in seconds. */
+  spell2BaseCooldown: number;
+
   // ---- Timer end‑times (epoch ms) – null means timer is inactive ----------
   /** When the ultimate timer expires (epoch ms). */
   ultEndTime: number | null;
@@ -83,6 +93,22 @@ export interface TimerStoreState {
   /** Replace a champion slot with new data (partial merge). */
   setChampion: (index: number, data: Partial<EnemyChampion>) => void;
 
+  /**
+   * Populate a slot from a Data Dragon champion‑detail response.
+   *
+   * Extracts `id`, `name`, and the Ultimate cooldowns (4th spell,
+   * `spells[3].cooldown`) into `ultBaseCooldowns`.  Resets the slot to
+   * level 6, 0 haste, and no running timers.
+   */
+  setChampionData: (
+    index: number,
+    detail: {
+      id: string;
+      name: string;
+      spells: Array<{ cooldown: number[] }>;
+    },
+  ) => void;
+
   /** Reset a slot back to its empty default state. */
   clearChampion: (index: number) => void;
 
@@ -97,20 +123,27 @@ export interface TimerStoreState {
   /** Update the ability haste value for a champion. */
   setAbilityHaste: (index: number, haste: number) => void;
 
+  // ---- Summoner spell selection ---------------------------------------------
+  /**
+   * Assign a summoner spell to a slot.
+   * Resets the timer for that slot if one was running.
+   */
+  setSummonerSpell: (
+    index: number,
+    slot: 1 | 2,
+    spellId: string,
+    cooldown: number,
+  ) => void;
+
   // ---- Timers -------------------------------------------------------------
   /** Start the ultimate timer for the champion at `index`. */
   startUltTimer: (index: number) => void;
 
   /**
    * Start a summoner spell timer.
-   * @param spellSlot  1 or 2
-   * @param baseCooldown  Base cooldown of the summoner spell **in seconds**
+   * Reads the base cooldown from the stored spell data for the given slot.
    */
-  startSpellTimer: (
-    index: number,
-    spellSlot: 1 | 2,
-    baseCooldown: number
-  ) => void;
+  startSpellTimer: (index: number, spellSlot: 1 | 2) => void;
 
   /** Clear (cancel) the ultimate timer. */
   clearUltTimer: (index: number) => void;
@@ -134,6 +167,10 @@ function createEmptyChampion(): EnemyChampion {
     activeUltCooldown: null,
     currentLevel: 1,
     abilityHaste: 0,
+    spell1Id: "SummonerFlash",
+    spell2Id: "SummonerFlash",
+    spell1BaseCooldown: 300,
+    spell2BaseCooldown: 300,
     ultEndTime: null,
     spell1EndTime: null,
     spell2EndTime: null,
@@ -187,6 +224,41 @@ export const useTimerStore = create<TimerStoreState>()((set, get) => ({
     });
   },
 
+  setChampionData(
+    index: number,
+    detail: {
+      id: string;
+      name: string;
+      spells: Array<{ cooldown: number[] }>;
+    },
+  ) {
+    const i = validIndex(index);
+    if (i === null) return;
+
+    // The Ultimate is the 4th spell (index 3).
+    const ultSpell = detail.spells[3];
+    const cd = ultSpell?.cooldown ?? [0, 0, 0];
+    const ultBaseCooldowns: [number, number, number] = [
+      cd[0] ?? 0,
+      cd[1] ?? 0,
+      cd[2] ?? 0,
+    ];
+
+    set((state) => {
+      const enemies = [...state.enemies];
+      enemies[i] = {
+        ...createEmptyChampion(),
+        id: detail.id,
+        name: detail.name,
+        ultBaseCooldowns,
+        currentLevel: 6,
+        // Level 6 → index 0 of ultBaseCooldowns
+        activeUltCooldown: ultBaseCooldowns[0],
+      };
+      return { enemies };
+    });
+  },
+
   clearChampion(index: number) {
     const i = validIndex(index);
     if (i === null) return;
@@ -211,11 +283,16 @@ export const useTimerStore = create<TimerStoreState>()((set, get) => ({
       const nextIdx = (currentIdx + 1) % LEVEL_CYCLE.length;
       champ.currentLevel = LEVEL_CYCLE[nextIdx];
 
-      // Automatically update the active ult cooldown for the new level.
+      // Update `activeUltCooldown` for the new level.  This value is used
+      // the *next* time a timer is started — any already‑running timer
+      // continues counting down to its original `ultEndTime` unaffected.
       champ.activeUltCooldown = deriveActiveUltCooldown(
         champ.currentLevel,
-        champ.ultBaseCooldowns
+        champ.ultBaseCooldowns,
       );
+
+      // NOTE: `ultEndTime` is intentionally left unchanged so a running
+      // timer is never interrupted by a level toggle.
 
       enemies[i] = champ;
       return { enemies };
@@ -230,6 +307,35 @@ export const useTimerStore = create<TimerStoreState>()((set, get) => ({
     set((state) => {
       const enemies = [...state.enemies];
       enemies[i] = { ...enemies[i], abilityHaste: haste };
+      return { enemies };
+    });
+  },
+
+  // ---- Summoner spell selection ---------------------------------------------
+  setSummonerSpell(
+    index: number,
+    slot: 1 | 2,
+    spellId: string,
+    cooldown: number,
+  ) {
+    const i = validIndex(index);
+    if (i === null) return;
+
+    const idKey: keyof EnemyChampion =
+      slot === 1 ? "spell1Id" : "spell2Id";
+    const cdKey: keyof EnemyChampion =
+      slot === 1 ? "spell1BaseCooldown" : "spell2BaseCooldown";
+    const endKey: keyof EnemyChampion =
+      slot === 1 ? "spell1EndTime" : "spell2EndTime";
+
+    set((state) => {
+      const enemies = [...state.enemies];
+      enemies[i] = {
+        ...enemies[i],
+        [idKey]: spellId,
+        [cdKey]: cooldown,
+        [endKey]: null, // reset any running timer for this slot
+      };
       return { enemies };
     });
   },
@@ -259,22 +365,20 @@ export const useTimerStore = create<TimerStoreState>()((set, get) => ({
     });
   },
 
-  startSpellTimer(
-    index: number,
-    spellSlot: 1 | 2,
-    baseCooldown: number
-  ) {
+  startSpellTimer(index: number, spellSlot: 1 | 2) {
     const i = validIndex(index);
     if (i === null) return;
 
-    // NOTE: Summoner spell haste is a separate stat in League; for simplicity
-    // we apply the champion's ability haste here. Swap in a dedicated haste
-    // value later if needed.
     const { enemies, calculateCooldown } = get();
-    const effectiveCD = calculateCooldown(
-      baseCooldown,
-      enemies[i].abilityHaste
-    );
+    const champ = enemies[i];
+
+    const baseCooldown =
+      spellSlot === 1 ? champ.spell1BaseCooldown : champ.spell2BaseCooldown;
+    if (baseCooldown <= 0) return; // no spell assigned
+
+    // NOTE: Summoner spell haste is a separate stat in League; for simplicity
+    // we apply the champion's ability haste here.
+    const effectiveCD = calculateCooldown(baseCooldown, champ.abilityHaste);
 
     const endTime = Date.now() + effectiveCD * 1000;
     const key: keyof EnemyChampion =

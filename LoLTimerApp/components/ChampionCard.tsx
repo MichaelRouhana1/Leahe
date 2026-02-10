@@ -1,5 +1,6 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Animated,
   Pressable,
   StyleSheet,
   Text,
@@ -11,15 +12,19 @@ import * as Haptics from "expo-haptics";
 import { User } from "lucide-react-native";
 
 import { useTimerStore } from "@/store/useTimerStore";
-import { getChampionIconUrl } from "@/constants/dataDragon";
+import {
+  getChampionIconUrl,
+  getSummonerSpellIconUrl,
+} from "@/constants/dataDragon";
 import { TimerCircle } from "@/components/TimerCircle";
+import { ChampionSearchModal } from "@/components/ChampionSearchModal";
+import { SummonerSpellPicker } from "@/components/SummonerSpellPicker";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Default summoner‑spell base cooldown in seconds (Flash). */
-const DEFAULT_SPELL_CD = 300;
+const SPELL_VERSION = "14.3.1";
 
 // LoL‑client‑inspired dark palette
 const C = {
@@ -57,16 +62,61 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
 
   const hasChampion = enemy.id !== "";
 
+  // ---- Champion search modal ----------------------------------------------
+  const [modalVisible, setModalVisible] = useState(false);
+  const openModal = useCallback(() => setModalVisible(true), []);
+  const closeModal = useCallback(() => setModalVisible(false), []);
+
+  // ---- Ultimate lock / pulse animation ------------------------------------
+  const ultLocked = enemy.currentLevel === 1;
+
+  const ultScaleAnim = useRef(new Animated.Value(1)).current;
+  const prevLevelRef = useRef(enemy.currentLevel);
+
+  useEffect(() => {
+    const prev = prevLevelRef.current;
+    prevLevelRef.current = enemy.currentLevel;
+
+    // Only animate when the level actually changed AND the new level has ult.
+    if (prev === enemy.currentLevel) return;
+    if (enemy.currentLevel === 1) return;
+
+    Animated.sequence([
+      Animated.timing(ultScaleAnim, {
+        toValue: 1.2,
+        duration: 140,
+        useNativeDriver: true,
+      }),
+      Animated.timing(ultScaleAnim, {
+        toValue: 1,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [enemy.currentLevel, ultScaleAnim]);
+
+  // ---- Summoner spell picker ------------------------------------------------
+  const [spellPickerSlot, setSpellPickerSlot] = useState<1 | 2 | null>(null);
+  const closeSpellPicker = useCallback(() => setSpellPickerSlot(null), []);
+
   // ---- Derived effective cooldowns (live‑update when AH changes) ----------
   const effectiveUltCD =
     enemy.activeUltCooldown !== null
       ? calculateCooldown(enemy.activeUltCooldown, enemy.abilityHaste)
       : null;
 
-  const effectiveSpellCD = calculateCooldown(
-    DEFAULT_SPELL_CD,
+  const effectiveSpell1CD = calculateCooldown(
+    enemy.spell1BaseCooldown,
     enemy.abilityHaste,
   );
+  const effectiveSpell2CD = calculateCooldown(
+    enemy.spell2BaseCooldown,
+    enemy.abilityHaste,
+  );
+
+  // ---- Spell icon URIs ----------------------------------------------------
+  const spell1IconUri = getSummonerSpellIconUrl(SPELL_VERSION, enemy.spell1Id);
+  const spell2IconUri = getSummonerSpellIconUrl(SPELL_VERSION, enemy.spell2Id);
 
   // ---- Handlers -----------------------------------------------------------
   // We read fresh state inside callbacks via getState() so that memoised
@@ -90,8 +140,7 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
   const handleUltPress = useCallback(() => {
     const state = useTimerStore.getState();
     const champ = state.enemies[index];
-    if (champ.activeUltCooldown === null) return; // no ult at lv 1
-    // Only start when idle / expired
+    if (champ.activeUltCooldown === null) return;
     if (champ.ultEndTime !== null && champ.ultEndTime > Date.now()) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     state.startUltTimer(index);
@@ -111,15 +160,19 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
     const champ = state.enemies[index];
     if (champ.spell1EndTime !== null && champ.spell1EndTime > Date.now()) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    state.startSpellTimer(index, 1, DEFAULT_SPELL_CD);
+    state.startSpellTimer(index, 1);
   }, [index]);
 
   const handleSpell1LongPress = useCallback(() => {
     const state = useTimerStore.getState();
     const champ = state.enemies[index];
+    // Running → reset timer
     if (champ.spell1EndTime !== null && champ.spell1EndTime > Date.now()) {
       state.clearSpellTimer(index, 1);
+      return;
     }
+    // Idle → open spell picker
+    setSpellPickerSlot(1);
   }, [index]);
 
   // -- Spell 2 (F)
@@ -128,15 +181,19 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
     const champ = state.enemies[index];
     if (champ.spell2EndTime !== null && champ.spell2EndTime > Date.now()) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    state.startSpellTimer(index, 2, DEFAULT_SPELL_CD);
+    state.startSpellTimer(index, 2);
   }, [index]);
 
   const handleSpell2LongPress = useCallback(() => {
     const state = useTimerStore.getState();
     const champ = state.enemies[index];
+    // Running → reset timer
     if (champ.spell2EndTime !== null && champ.spell2EndTime > Date.now()) {
       state.clearSpellTimer(index, 2);
+      return;
     }
+    // Idle → open spell picker
+    setSpellPickerSlot(2);
   }, [index]);
 
   // ---- Icon URI -----------------------------------------------------------
@@ -145,8 +202,8 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
   // ---- Render -------------------------------------------------------------
   return (
     <View style={styles.card}>
-      {/* ── LEFT: Champion icon ──────────────────────────────────────── */}
-      <View style={styles.iconCol}>
+      {/* ── LEFT: Champion icon (tap to select / change) ─────────────── */}
+      <Pressable style={styles.iconCol} onPress={openModal}>
         {iconUri ? (
           <Image
             source={{ uri: iconUri }}
@@ -160,12 +217,25 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
           </View>
         )}
 
-        {hasChampion && (
-          <Text style={styles.champName} numberOfLines={1}>
-            {enemy.name}
-          </Text>
-        )}
-      </View>
+        <Text style={styles.champName} numberOfLines={1}>
+          {hasChampion ? enemy.name : "Select"}
+        </Text>
+      </Pressable>
+
+      {/* Champion search modal */}
+      <ChampionSearchModal
+        visible={modalVisible}
+        index={index}
+        onClose={closeModal}
+      />
+
+      {/* Summoner spell picker */}
+      <SummonerSpellPicker
+        visible={spellPickerSlot !== null}
+        index={index}
+        slot={spellPickerSlot ?? 1}
+        onClose={closeSpellPicker}
+      />
 
       {/* ── CENTRE: Level toggle + Ability Haste ────────────────────── */}
       <View style={styles.centreCol}>
@@ -203,32 +273,37 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
 
       {/* ── RIGHT: Timer circles ────────────────────────────────────── */}
       <View style={styles.timersRow}>
-        <TimerCircle
-          label="R"
-          endTime={enemy.ultEndTime}
-          totalDuration={effectiveUltCD ?? 0}
-          color={C.gold}
-          effectiveCooldown={effectiveUltCD}
-          onPress={handleUltPress}
-          onLongPress={handleUltLongPress}
-        />
+        <Animated.View style={{ transform: [{ scale: ultScaleAnim }] }}>
+          <TimerCircle
+            label="R"
+            endTime={enemy.ultEndTime}
+            totalDuration={effectiveUltCD ?? 0}
+            color={C.gold}
+            effectiveCooldown={effectiveUltCD}
+            onPress={handleUltPress}
+            onLongPress={handleUltLongPress}
+            disabled={ultLocked}
+          />
+        </Animated.View>
         <TimerCircle
           label="D"
           endTime={enemy.spell1EndTime}
-          totalDuration={effectiveSpellCD}
+          totalDuration={effectiveSpell1CD}
           color={C.teal}
-          effectiveCooldown={effectiveSpellCD}
+          effectiveCooldown={effectiveSpell1CD}
           onPress={handleSpell1Press}
           onLongPress={handleSpell1LongPress}
+          iconUri={spell1IconUri}
         />
         <TimerCircle
           label="F"
           endTime={enemy.spell2EndTime}
-          totalDuration={effectiveSpellCD}
+          totalDuration={effectiveSpell2CD}
           color={C.teal}
-          effectiveCooldown={effectiveSpellCD}
+          effectiveCooldown={effectiveSpell2CD}
           onPress={handleSpell2Press}
           onLongPress={handleSpell2LongPress}
+          iconUri={spell2IconUri}
         />
       </View>
     </View>

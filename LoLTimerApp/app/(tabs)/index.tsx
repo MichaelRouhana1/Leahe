@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useEffect } from "react";
 import {
   Alert,
   Pressable,
@@ -13,6 +13,7 @@ import * as Haptics from "expo-haptics";
 
 import { ChampionCard } from "@/components/ChampionCard";
 import { useTimerStore } from "@/store/useTimerStore";
+import { loadPingSound } from "@/utils/pingSound";
 
 // LoL‑inspired palette (matches ChampionCard)
 const C = {
@@ -30,6 +31,11 @@ const ENEMY_INDICES = [0, 1, 2, 3, 4] as const;
 
 export default function TimerScreen() {
   const insets = useSafeAreaInsets();
+
+  // Pre‑load the ping sound so playback is instant when a timer finishes.
+  useEffect(() => {
+    loadPingSound();
+  }, []);
 
   const handleResetAll = useCallback(() => {
     Alert.alert(
