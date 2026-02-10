@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -51,6 +53,18 @@ export interface EnemyChampion {
 
   /** Ability Haste stat entered by the user (default 0). */
   abilityHaste: number;
+
+  // ---- Summoner‑spell haste (separate from ability haste) -------------------
+  /** Whether Ionian Boots of Lucidity are assumed (+12 Summoner Spell Haste). */
+  ionianBoots: boolean;
+  /** Whether Cosmic Insight rune is assumed (+18 Summoner Spell Haste). */
+  cosmicInsight: boolean;
+  /**
+   * Derived Summoner Spell Haste:
+   *   (ionianBoots ? 12 : 0) + (cosmicInsight ? 18 : 0)
+   * Kept in sync by `toggleIonianBoots` / `toggleCosmicInsight`.
+   */
+  summonerHaste: number;
 
   // ---- Summoner spells ------------------------------------------------------
   /** Data Dragon id for summoner spell 1, e.g. "SummonerFlash". */
@@ -123,6 +137,12 @@ export interface TimerStoreState {
   /** Update the ability haste value for a champion. */
   setAbilityHaste: (index: number, haste: number) => void;
 
+  // ---- Summoner haste toggles -----------------------------------------------
+  /** Toggle Ionian Boots of Lucidity (+12 Summoner Spell Haste). */
+  toggleIonianBoots: (index: number) => void;
+  /** Toggle Cosmic Insight rune (+18 Summoner Spell Haste). */
+  toggleCosmicInsight: (index: number) => void;
+
   // ---- Summoner spell selection ---------------------------------------------
   /**
    * Assign a summoner spell to a slot.
@@ -167,6 +187,9 @@ function createEmptyChampion(): EnemyChampion {
     activeUltCooldown: null,
     currentLevel: 1,
     abilityHaste: 0,
+    ionianBoots: false,
+    cosmicInsight: false,
+    summonerHaste: 0,
     spell1Id: "SummonerFlash",
     spell2Id: "SummonerFlash",
     spell1BaseCooldown: 300,
@@ -185,6 +208,11 @@ function deriveActiveUltCooldown(
   return idx !== null ? ultBaseCooldowns[idx] : null;
 }
 
+/** Derive summonerHaste from the two toggle booleans. */
+function deriveSummonerHaste(ionianBoots: boolean, cosmicInsight: boolean): number {
+  return (ionianBoots ? 12 : 0) + (cosmicInsight ? 18 : 0);
+}
+
 /** Clamp `index` to [0, 4] and return it, or `null` if out of range. */
 function validIndex(index: number): number | null {
   if (index < 0 || index > 4) return null;
@@ -195,7 +223,9 @@ function validIndex(index: number): number | null {
 // Store
 // ---------------------------------------------------------------------------
 
-export const useTimerStore = create<TimerStoreState>()((set, get) => ({
+export const useTimerStore = create<TimerStoreState>()(
+  persist(
+    (set, get) => ({
   // ---- State --------------------------------------------------------------
   enemies: Array.from({ length: 5 }, createEmptyChampion),
 
@@ -311,6 +341,35 @@ export const useTimerStore = create<TimerStoreState>()((set, get) => ({
     });
   },
 
+  // ---- Summoner haste toggles -----------------------------------------------
+  toggleIonianBoots(index: number) {
+    const i = validIndex(index);
+    if (i === null) return;
+
+    set((state) => {
+      const enemies = [...state.enemies];
+      const champ = { ...enemies[i] };
+      champ.ionianBoots = !champ.ionianBoots;
+      champ.summonerHaste = deriveSummonerHaste(champ.ionianBoots, champ.cosmicInsight);
+      enemies[i] = champ;
+      return { enemies };
+    });
+  },
+
+  toggleCosmicInsight(index: number) {
+    const i = validIndex(index);
+    if (i === null) return;
+
+    set((state) => {
+      const enemies = [...state.enemies];
+      const champ = { ...enemies[i] };
+      champ.cosmicInsight = !champ.cosmicInsight;
+      champ.summonerHaste = deriveSummonerHaste(champ.ionianBoots, champ.cosmicInsight);
+      enemies[i] = champ;
+      return { enemies };
+    });
+  },
+
   // ---- Summoner spell selection ---------------------------------------------
   setSummonerSpell(
     index: number,
@@ -376,9 +435,9 @@ export const useTimerStore = create<TimerStoreState>()((set, get) => ({
       spellSlot === 1 ? champ.spell1BaseCooldown : champ.spell2BaseCooldown;
     if (baseCooldown <= 0) return; // no spell assigned
 
-    // NOTE: Summoner spell haste is a separate stat in League; for simplicity
-    // we apply the champion's ability haste here.
-    const effectiveCD = calculateCooldown(baseCooldown, champ.abilityHaste);
+    // Summoner Spell Haste is separate from Ability Haste in League.
+    // It comes from Ionian Boots (+12) and Cosmic Insight (+18).
+    const effectiveCD = calculateCooldown(baseCooldown, champ.summonerHaste);
 
     const endTime = Date.now() + effectiveCD * 1000;
     const key: keyof EnemyChampion =
@@ -419,4 +478,39 @@ export const useTimerStore = create<TimerStoreState>()((set, get) => ({
   resetAll() {
     set({ enemies: Array.from({ length: 5 }, createEmptyChampion) });
   },
-}));
+    }),
+    {
+      name: "lol-timer-store",
+      storage: createJSONStorage(() => AsyncStorage),
+      version: 1,
+
+      // Only persist the `enemies` data array — actions are re‑created by
+      // Zustand on every mount and don't need serialisation.
+      partialize: (state) =>
+        ({ enemies: state.enemies }) as unknown as TimerStoreState,
+
+      // After rehydration, clear any timer end‑times that are already in the
+      // past so the UI doesn't flash a stale countdown on re‑open.
+      onRehydrateStorage: () => (state, error) => {
+        if (error || !state) return;
+        const now = Date.now();
+        const cleaned = state.enemies.map((champ) => ({
+          ...champ,
+          ultEndTime:
+            champ.ultEndTime && champ.ultEndTime > now
+              ? champ.ultEndTime
+              : null,
+          spell1EndTime:
+            champ.spell1EndTime && champ.spell1EndTime > now
+              ? champ.spell1EndTime
+              : null,
+          spell2EndTime:
+            champ.spell2EndTime && champ.spell2EndTime > now
+              ? champ.spell2EndTime
+              : null,
+        }));
+        useTimerStore.setState({ enemies: cleaned });
+      },
+    },
+  ),
+);

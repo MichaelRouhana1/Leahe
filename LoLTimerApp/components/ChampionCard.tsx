@@ -107,11 +107,11 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
 
   const effectiveSpell1CD = calculateCooldown(
     enemy.spell1BaseCooldown,
-    enemy.abilityHaste,
+    enemy.summonerHaste,
   );
   const effectiveSpell2CD = calculateCooldown(
     enemy.spell2BaseCooldown,
-    enemy.abilityHaste,
+    enemy.summonerHaste,
   );
 
   // ---- Spell icon URIs ----------------------------------------------------
@@ -124,6 +124,14 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
 
   const handleLevelToggle = useCallback(() => {
     useTimerStore.getState().cycleLevel(index);
+  }, [index]);
+
+  const handleToggleIonian = useCallback(() => {
+    useTimerStore.getState().toggleIonianBoots(index);
+  }, [index]);
+
+  const handleToggleCosmic = useCallback(() => {
+    useTimerStore.getState().toggleCosmicInsight(index);
   }, [index]);
 
   const handleHasteChange = useCallback(
@@ -269,6 +277,42 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
             R {Math.round(effectiveUltCD)}s
           </Text>
         )}
+
+        {/* Summoner Haste toggles */}
+        <View style={styles.shRow}>
+          <Pressable
+            onPress={handleToggleIonian}
+            style={[
+              styles.shToggle,
+              enemy.ionianBoots && styles.shToggleActive,
+            ]}
+          >
+            <Text
+              style={[
+                styles.shToggleTxt,
+                enemy.ionianBoots && styles.shToggleTxtActive,
+              ]}
+            >
+              Boots
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={handleToggleCosmic}
+            style={[
+              styles.shToggle,
+              enemy.cosmicInsight && styles.shToggleActive,
+            ]}
+          >
+            <Text
+              style={[
+                styles.shToggleTxt,
+                enemy.cosmicInsight && styles.shToggleTxtActive,
+              ]}
+            >
+              Cosmic
+            </Text>
+          </Pressable>
+        </View>
       </View>
 
       {/* ── RIGHT: Timer circles ────────────────────────────────────── */}
@@ -402,6 +446,33 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: C.textMuted,
     fontVariant: ["tabular-nums"],
+  },
+
+  /* ── Summoner Haste toggles ──────────────────────────────────── */
+  shRow: {
+    flexDirection: "row",
+    gap: 4,
+    marginTop: 2,
+  },
+  shToggle: {
+    borderWidth: 1,
+    borderColor: C.cardBorder,
+    borderRadius: 6,
+    paddingVertical: 2,
+    paddingHorizontal: 5,
+    backgroundColor: "transparent",
+  },
+  shToggleActive: {
+    borderColor: C.teal,
+    backgroundColor: "rgba(10, 200, 185, 0.15)",
+  },
+  shToggleTxt: {
+    fontSize: 8,
+    fontWeight: "600",
+    color: C.textMuted,
+  },
+  shToggleTxtActive: {
+    color: C.teal,
   },
 
   /* ── Right: timer circles ─────────────────────────────────────── */
