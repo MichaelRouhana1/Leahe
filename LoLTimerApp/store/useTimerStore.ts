@@ -42,6 +42,12 @@ export interface EnemyChampion {
   ultBaseCooldowns: [number, number, number];
 
   /**
+   * Data Dragon image filename for the ultimate ability,
+   * e.g. "LuxMaliceCannon.png". Empty string when no champion is set.
+   */
+  ultImageName: string;
+
+  /**
    * The currently "active" base cooldown for the ultimate.
    * Derived from `currentLevel` + `ultBaseCooldowns`.
    * `null` when `currentLevel` is 1 (champion has no ult yet).
@@ -54,14 +60,35 @@ export interface EnemyChampion {
   /** Ability Haste stat entered by the user (default 0). */
   abilityHaste: number;
 
+  // ---- Ultimate haste (stacks with ability haste for R only) -----------------
+  /**
+   * Ultimate Hunter rune stacks.
+   * -1 = rune not taken (0 haste).
+   *  0 = rune equipped, 0 takedowns (6 base haste).
+   *  1–5 = that many unique takedowns (6 + stacks × 5 haste).
+   * Cycle: -1 → 0 → 1 → 2 → 3 → 4 → 5 → -1.
+   */
+  ultimateHunterStacks: number;
+  /** Whether Malignance item is assumed (+20 Ultimate Haste). */
+  malignance: boolean;
+  /** Whether Cloud Drake Soul is active (+25 Ultimate Haste). */
+  cloudSoul: boolean;
+  /**
+   * Derived Ultimate Haste — sum of all Ult‑Haste sources:
+   *   Ultimate Hunter + Malignance + Cloud Soul.
+   * Kept in sync by the respective toggle / cycle actions.
+   * Added to `abilityHaste` when computing the ultimate effective CD.
+   */
+  ultimateHaste: number;
+
   // ---- Summoner‑spell haste (separate from ability haste) -------------------
-  /** Whether Ionian Boots of Lucidity are assumed (+12 Summoner Spell Haste). */
+  /** Whether Ionian Boots of Lucidity are assumed (+10 Summoner Spell Haste). */
   ionianBoots: boolean;
   /** Whether Cosmic Insight rune is assumed (+18 Summoner Spell Haste). */
   cosmicInsight: boolean;
   /**
    * Derived Summoner Spell Haste:
-   *   (ionianBoots ? 12 : 0) + (cosmicInsight ? 18 : 0)
+   *   (ionianBoots ? 10 : 0) + (cosmicInsight ? 18 : 0)
    * Kept in sync by `toggleIonianBoots` / `toggleCosmicInsight`.
    */
   summonerHaste: number;
@@ -119,7 +146,7 @@ export interface TimerStoreState {
     detail: {
       id: string;
       name: string;
-      spells: Array<{ cooldown: number[] }>;
+      spells: Array<{ cooldown: number[]; image: { full: string } }>;
     },
   ) => void;
 
@@ -137,8 +164,16 @@ export interface TimerStoreState {
   /** Update the ability haste value for a champion. */
   setAbilityHaste: (index: number, haste: number) => void;
 
+  // ---- Ultimate haste toggles -------------------------------------------------
+  /** Cycle Ultimate Hunter stacks: 0 → 1 → 2 → 3 → 4 → 5 → 0. */
+  cycleUltimateHunterStacks: (index: number) => void;
+  /** Toggle Malignance item (+20 Ultimate Haste). */
+  toggleMalignance: (index: number) => void;
+  /** Toggle Cloud Drake Soul (+25 Ultimate Haste). */
+  toggleCloudSoul: (index: number) => void;
+
   // ---- Summoner haste toggles -----------------------------------------------
-  /** Toggle Ionian Boots of Lucidity (+12 Summoner Spell Haste). */
+  /** Toggle Ionian Boots of Lucidity (+10 Summoner Spell Haste). */
   toggleIonianBoots: (index: number) => void;
   /** Toggle Cosmic Insight rune (+18 Summoner Spell Haste). */
   toggleCosmicInsight: (index: number) => void;
@@ -184,9 +219,14 @@ function createEmptyChampion(): EnemyChampion {
     id: "",
     name: "",
     ultBaseCooldowns: [0, 0, 0],
+    ultImageName: "",
     activeUltCooldown: null,
     currentLevel: 1,
     abilityHaste: 0,
+    ultimateHunterStacks: -1,
+    malignance: false,
+    cloudSoul: false,
+    ultimateHaste: 0,
     ionianBoots: false,
     cosmicInsight: false,
     summonerHaste: 0,
@@ -208,9 +248,24 @@ function deriveActiveUltCooldown(
   return idx !== null ? ultBaseCooldowns[idx] : null;
 }
 
+/**
+ * Derive total Ultimate Haste from all sources.
+ * Ultimate Hunter: 6 base + 5 per stack (0 if stacks < 0, i.e. rune not taken).
+ * Malignance: flat 20.
+ * Cloud Soul: flat 25.
+ */
+function deriveUltimateHaste(
+  hunterStacks: number,
+  malignance: boolean,
+  cloudSoul: boolean,
+): number {
+  const hunter = hunterStacks >= 0 ? 6 + hunterStacks * 5 : 0;
+  return hunter + (malignance ? 20 : 0) + (cloudSoul ? 25 : 0);
+}
+
 /** Derive summonerHaste from the two toggle booleans. */
 function deriveSummonerHaste(ionianBoots: boolean, cosmicInsight: boolean): number {
-  return (ionianBoots ? 12 : 0) + (cosmicInsight ? 18 : 0);
+  return (ionianBoots ? 10 : 0) + (cosmicInsight ? 18 : 0);
 }
 
 /** Clamp `index` to [0, 4] and return it, or `null` if out of range. */
@@ -259,7 +314,7 @@ export const useTimerStore = create<TimerStoreState>()(
     detail: {
       id: string;
       name: string;
-      spells: Array<{ cooldown: number[] }>;
+      spells: Array<{ cooldown: number[]; image: { full: string } }>;
     },
   ) {
     const i = validIndex(index);
@@ -273,6 +328,7 @@ export const useTimerStore = create<TimerStoreState>()(
       cd[1] ?? 0,
       cd[2] ?? 0,
     ];
+    const ultImageName = ultSpell?.image?.full ?? "";
 
     set((state) => {
       const enemies = [...state.enemies];
@@ -281,6 +337,7 @@ export const useTimerStore = create<TimerStoreState>()(
         id: detail.id,
         name: detail.name,
         ultBaseCooldowns,
+        ultImageName,
         currentLevel: 6,
         // Level 6 → index 0 of ultBaseCooldowns
         activeUltCooldown: ultBaseCooldowns[0],
@@ -341,6 +398,67 @@ export const useTimerStore = create<TimerStoreState>()(
     });
   },
 
+  // ---- Ultimate haste toggles -------------------------------------------------
+  cycleUltimateHunterStacks(index: number) {
+    const i = validIndex(index);
+    if (i === null) return;
+
+    set((state) => {
+      const enemies = [...state.enemies];
+      const champ = { ...enemies[i] };
+      // Cycle: -1 (off) → 0 → 1 → 2 → 3 → 4 → 5 → -1 (off)
+      champ.ultimateHunterStacks =
+        champ.ultimateHunterStacks >= 5 ? -1 : champ.ultimateHunterStacks + 1;
+      champ.ultimateHaste = deriveUltimateHaste(
+        champ.ultimateHunterStacks,
+        champ.malignance,
+        champ.cloudSoul,
+      );
+      enemies[i] = champ;
+      return { enemies };
+    });
+  },
+
+  toggleMalignance(index: number) {
+    const i = validIndex(index);
+    if (i === null) return;
+
+    set((state) => {
+      const enemies = [...state.enemies];
+      const champ = { ...enemies[i] };
+      champ.malignance = !champ.malignance;
+      // Malignance also grants 15 Ability Haste — adjust the AH field.
+      champ.abilityHaste = champ.malignance
+        ? champ.abilityHaste + 15
+        : Math.max(0, champ.abilityHaste - 15);
+      champ.ultimateHaste = deriveUltimateHaste(
+        champ.ultimateHunterStacks,
+        champ.malignance,
+        champ.cloudSoul,
+      );
+      enemies[i] = champ;
+      return { enemies };
+    });
+  },
+
+  toggleCloudSoul(index: number) {
+    const i = validIndex(index);
+    if (i === null) return;
+
+    set((state) => {
+      const enemies = [...state.enemies];
+      const champ = { ...enemies[i] };
+      champ.cloudSoul = !champ.cloudSoul;
+      champ.ultimateHaste = deriveUltimateHaste(
+        champ.ultimateHunterStacks,
+        champ.malignance,
+        champ.cloudSoul,
+      );
+      enemies[i] = champ;
+      return { enemies };
+    });
+  },
+
   // ---- Summoner haste toggles -----------------------------------------------
   toggleIonianBoots(index: number) {
     const i = validIndex(index);
@@ -350,6 +468,10 @@ export const useTimerStore = create<TimerStoreState>()(
       const enemies = [...state.enemies];
       const champ = { ...enemies[i] };
       champ.ionianBoots = !champ.ionianBoots;
+      // Lucidity Boots also grant 10 Ability Haste — adjust the AH field.
+      champ.abilityHaste = champ.ionianBoots
+        ? champ.abilityHaste + 10
+        : Math.max(0, champ.abilityHaste - 10);
       champ.summonerHaste = deriveSummonerHaste(champ.ionianBoots, champ.cosmicInsight);
       enemies[i] = champ;
       return { enemies };
@@ -409,9 +531,11 @@ export const useTimerStore = create<TimerStoreState>()(
 
     if (champ.activeUltCooldown === null) return; // no ult at level 1
 
+    // Ultimate Haste stacks additively with Ability Haste for R.
+    const totalUltHaste = champ.abilityHaste + champ.ultimateHaste;
     const effectiveCD = calculateCooldown(
       champ.activeUltCooldown,
-      champ.abilityHaste
+      totalUltHaste,
     );
 
     set((state) => {

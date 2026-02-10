@@ -9,10 +9,11 @@ import {
 } from "react-native";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
-import { User } from "lucide-react-native";
+import { Cloud, Crosshair, Flame, User } from "lucide-react-native";
 
 import { useTimerStore } from "@/store/useTimerStore";
 import {
+  getAbilityIconUrl,
   getChampionIconUrl,
   getSummonerSpellIconUrl,
 } from "@/constants/dataDragon";
@@ -100,9 +101,10 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
   const closeSpellPicker = useCallback(() => setSpellPickerSlot(null), []);
 
   // ---- Derived effective cooldowns (live‑update when AH changes) ----------
+  const totalUltHaste = enemy.abilityHaste + enemy.ultimateHaste;
   const effectiveUltCD =
     enemy.activeUltCooldown !== null
-      ? calculateCooldown(enemy.activeUltCooldown, enemy.abilityHaste)
+      ? calculateCooldown(enemy.activeUltCooldown, totalUltHaste)
       : null;
 
   const effectiveSpell1CD = calculateCooldown(
@@ -115,6 +117,9 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
   );
 
   // ---- Spell icon URIs ----------------------------------------------------
+  const ultIconUri = enemy.ultImageName
+    ? getAbilityIconUrl(SPELL_VERSION, enemy.ultImageName)
+    : null;
   const spell1IconUri = getSummonerSpellIconUrl(SPELL_VERSION, enemy.spell1Id);
   const spell2IconUri = getSummonerSpellIconUrl(SPELL_VERSION, enemy.spell2Id);
 
@@ -124,6 +129,18 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
 
   const handleLevelToggle = useCallback(() => {
     useTimerStore.getState().cycleLevel(index);
+  }, [index]);
+
+  const handleCycleUltHunter = useCallback(() => {
+    useTimerStore.getState().cycleUltimateHunterStacks(index);
+  }, [index]);
+
+  const handleToggleMalignance = useCallback(() => {
+    useTimerStore.getState().toggleMalignance(index);
+  }, [index]);
+
+  const handleToggleCloudSoul = useCallback(() => {
+    useTimerStore.getState().toggleCloudSoul(index);
   }, [index]);
 
   const handleToggleIonian = useCallback(() => {
@@ -278,6 +295,79 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
           </Text>
         )}
 
+        {/* Ultimate Haste toggles */}
+        <View style={styles.uhRow}>
+          {/* Ultimate Hunter – cycles off → 0/5 → 1/5 → … → 5/5 → off */}
+          <Pressable
+            onPress={handleCycleUltHunter}
+            style={[
+              styles.uhChip,
+              enemy.ultimateHunterStacks >= 0 && styles.uhChipActive,
+            ]}
+          >
+            <Crosshair
+              size={9}
+              color={
+                enemy.ultimateHunterStacks >= 0 ? C.gold : C.textMuted
+              }
+            />
+            <Text
+              style={[
+                styles.uhChipTxt,
+                enemy.ultimateHunterStacks >= 0 && styles.uhChipTxtActive,
+              ]}
+            >
+              {enemy.ultimateHunterStacks >= 0
+                ? `${enemy.ultimateHunterStacks}/5`
+                : "Off"}
+            </Text>
+          </Pressable>
+
+          {/* Malignance (+20 UH) */}
+          <Pressable
+            onPress={handleToggleMalignance}
+            style={[
+              styles.uhChip,
+              enemy.malignance && styles.uhChipActive,
+            ]}
+          >
+            <Flame
+              size={9}
+              color={enemy.malignance ? C.gold : C.textMuted}
+            />
+            <Text
+              style={[
+                styles.uhChipTxt,
+                enemy.malignance && styles.uhChipTxtActive,
+              ]}
+            >
+              Mal
+            </Text>
+          </Pressable>
+
+          {/* Cloud Soul (+25 UH) */}
+          <Pressable
+            onPress={handleToggleCloudSoul}
+            style={[
+              styles.uhChip,
+              enemy.cloudSoul && styles.cloudChipActive,
+            ]}
+          >
+            <Cloud
+              size={9}
+              color={enemy.cloudSoul ? "#88C0D0" : C.textMuted}
+            />
+            <Text
+              style={[
+                styles.uhChipTxt,
+                enemy.cloudSoul && styles.cloudChipTxtActive,
+              ]}
+            >
+              Soul
+            </Text>
+          </Pressable>
+        </View>
+
         {/* Summoner Haste toggles */}
         <View style={styles.shRow}>
           <Pressable
@@ -327,6 +417,7 @@ export function ChampionCard({ index, version = "14.3.1" }: ChampionCardProps) {
             onPress={handleUltPress}
             onLongPress={handleUltLongPress}
             disabled={ultLocked}
+            iconUri={ultIconUri}
           />
         </Animated.View>
         <TimerCircle
@@ -473,6 +564,42 @@ const styles = StyleSheet.create({
   },
   shToggleTxtActive: {
     color: C.teal,
+  },
+  /* ── Ultimate Haste chips ─────────────────────────────────────── */
+  uhRow: {
+    flexDirection: "row",
+    gap: 3,
+    marginTop: 2,
+  },
+  uhChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    borderWidth: 1,
+    borderColor: C.cardBorder,
+    borderRadius: 6,
+    paddingVertical: 2,
+    paddingHorizontal: 4,
+    backgroundColor: "transparent",
+  },
+  uhChipActive: {
+    borderColor: C.gold,
+    backgroundColor: "rgba(200, 155, 60, 0.15)",
+  },
+  uhChipTxt: {
+    fontSize: 7,
+    fontWeight: "700",
+    color: C.textMuted,
+  },
+  uhChipTxtActive: {
+    color: C.gold,
+  },
+  cloudChipActive: {
+    borderColor: "#88C0D0",
+    backgroundColor: "rgba(136, 192, 208, 0.15)",
+  },
+  cloudChipTxtActive: {
+    color: "#88C0D0",
   },
 
   /* ── Right: timer circles ─────────────────────────────────────── */

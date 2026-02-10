@@ -151,6 +151,21 @@ export function getSummonerSpellIconUrl(
 }
 
 /**
+ * Build the icon URL for a champion ability using its `image.full` name.
+ * Unlike `getSummonerSpellIconUrl`, the `imageFullName` param already
+ * includes the `.png` extension (e.g. "LuxMaliceCannon.png").
+ *
+ * Example: `getAbilityIconUrl("14.3.1", "LuxMaliceCannon.png")` →
+ *   https://ddragon.leagueoflegends.com/cdn/14.3.1/img/spell/LuxMaliceCannon.png
+ */
+export function getAbilityIconUrl(
+  version: string,
+  imageFullName: string,
+): string {
+  return `${DDRAGON_BASE}/cdn/${version}/img/spell/${imageFullName}`;
+}
+
+/**
  * Build the champion‑detail URL for a given champion + patch version.
  * Example: `getChampionDetailUrl("14.3.1", "Aatrox")` →
  *   https://ddragon.leagueoflegends.com/cdn/14.3.1/data/en_US/champion/Aatrox.json
